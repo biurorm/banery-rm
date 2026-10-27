@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#094d47">
+  <title>Banery, RM Nieruchomości</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="icon" href="icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="mobile-web-app-capable" content="yes">
+  <link rel="stylesheet" href="style.css?v=1">
+</head>
+<body>
+<div class="app">
+
+  <header>
+    <div class="header-left">
+      <img src="logo.png" alt="RM Nieruchomości" class="header-logo">
+      <div class="subtitle">Banery</div>
+    </div>
+    <div class="header-right">
+      <span class="wersja" data-wersja title="Wersja aplikacji"></span>
+      <button class="icon-btn small-txt" id="btn-wyloguj" hidden>Wyloguj</button>
+    </div>
+  </header>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <!-- LOGOWANIE -->
+  <section class="screen" id="ekran-logowanie" hidden>
+    <div class="card">
+      <div class="card-title">Zaloguj się</div>
+      <p class="muted">Ten sam e-mail i hasło co w aplikacji Zadania RM.</p>
+      <form id="form-logowanie">
+        <label>E-mail <input type="email" id="log-email" autocomplete="username" autocapitalize="off" required></label>
+        <label>Hasło <input type="password" id="log-haslo" autocomplete="current-password" required></label>
+        <button class="btn btn-main" type="submit">Zaloguj</button>
+        <div class="err" id="log-blad"></div>
+      </form>
+    </div>
+  </section>
+
+  <nav class="tabs" id="tabs" hidden>
+    <button data-tab="wisza" class="on">📍 Wiszą <span class="tab-ile" id="tab-problemy"></span></button>
+    <button data-tab="objazd">🚗 Objazd</button>
+    <button data-tab="archiwum">📦 Archiwum</button>
+  </nav>
+
+  <!-- WISZĄ -->
+  <section class="screen" id="ekran-wisza" hidden>
+    <div id="wisza-kafle"></div>
+    <button class="btn btn-main btn-big" data-akcja="nowy">＋ Dodaj baner albo tabliczkę</button>
+    <div class="szukaj card">
+      <input type="search" id="szukaj" placeholder="Szukaj: oferta, adres, kto montował" autocomplete="off">
+      <div class="chips" id="filtry"></div>
+    </div>
+    <div id="wisza-lista"></div>
+  </section>
+
+  <!-- OBJAZD -->
+  <section class="screen" id="ekran-objazd" hidden>
+    <div id="objazd-tresc"></div>
+    <div id="objazd-historia"></div>
+  </section>
+
+  <!-- ARCHIWUM -->
+  <section class="screen" id="ekran-archiwum" hidden>
+    <div id="archiwum-kafle"></div>
+    <div class="chips" id="archiwum-filtry"></div>
+    <div id="archiwum-lista"></div>
+  </section>
+
+  <!-- KARTA BANERU (wysuwana od dołu) -->
+  <div class="tlo" id="tlo" hidden></div>
+  <div class="arkusz" id="arkusz" hidden role="dialog" aria-modal="true" aria-labelledby="ark-tytul">
+    <div class="arkusz-uchwyt"></div>
+    <div class="row-between">
+      <div class="ark-nr" id="ark-nr"></div>
+      <button class="icon-btn dark" id="ark-zamknij" aria-label="Zamknij">✕</button>
+    </div>
+    <div id="ark-tresc"></div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+</div>
+
+<script src="config.js?v=1"></script>
+<script src="vendor/supabase.js"></script>
+<script src="app.js?v=1"></script>
+</body>
+</html>
