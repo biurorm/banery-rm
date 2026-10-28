@@ -128,6 +128,38 @@ input:focus, select:focus { outline: 2px solid var(--brand-light); outline-offse
 .pasek-dol label { margin-bottom: 0; }
 .czerwony-txt { color: var(--late); font-weight: 700; }
 
+.znak-mkt { font-size: 11px; font-weight: 700; color: #7c2d12; background: #ffedd5; padding: 1px 6px; border-radius: 6px; vertical-align: 2px; }
+.ok-txt { color: var(--ok); font-weight: 700; }
+
+/* TRASA OBJAZDU */
+.trasa { border-top: 4px solid var(--brand); }
+.km-box { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--brand-soft); border-radius: 12px; padding: 10px 12px; margin: 10px 0 6px; }
+.km-box span { display: block; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
+.km-box b { display: block; font-size: 28px; color: var(--brand); line-height: 1.1; }
+.km-box small { display: block; font-size: 12px; color: var(--muted); }
+.km-box .btn { width: auto; margin: 0; flex: none; padding: 10px 12px; font-size: 14px; }
+.trasa-lista { list-style: none; margin: 8px 0 4px; padding: 0; }
+.trasa-lista li { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+.trasa-lista li:last-child { border-bottom: 0; }
+.trasa-lista .nr { flex: none; width: 26px; height: 26px; border-radius: 13px; background: var(--brand); color: #fff; display: grid; place-items: center; font-size: 13px; font-weight: 700; }
+.trasa-biuro .nr { background: none; font-size: 18px; }
+.trasa-t { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
+.trasa-t b { font-size: 15px; } .trasa-t small { font-size: 12px; color: var(--muted); }
+.trasa-x { flex: none; width: 34px; height: 34px; border: 1px solid var(--border); background: #fff; border-radius: 10px; color: var(--late); font-size: 15px; cursor: pointer; }
+.trasa-poza { margin-top: 10px; }
+.obj-nr { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 11px; background: var(--brand); color: #fff; font-size: 12px; font-weight: 700; margin-right: 6px; vertical-align: 1px; }
+.obj-nr.poza { background: var(--border); color: var(--muted); }
+
+/* ZDJĘCIA */
+.obj-foto { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+.obj-foto-btn { margin: 0; display: inline-block; border: 1px dashed var(--brand-light); color: var(--brand); background: #fff; border-radius: 10px; padding: 8px 12px; font-size: 14px; font-weight: 600; cursor: pointer; }
+.miniatura img { display: block; width: 56px; height: 56px; object-fit: cover; border-radius: 8px; }
+.foto-pole { margin-top: 8px; }
+.foto-pole .btn { margin-top: 8px; }
+.foto-duze { display: block; position: relative; margin: 0 0 10px; }
+.foto-duze img { display: block; width: 100%; max-height: 260px; object-fit: cover; border-radius: 12px; background: var(--brand-soft); }
+.foto-duze span { position: absolute; left: 8px; bottom: 8px; background: rgba(0,0,0,.55); color: #fff; font-size: 12px; padding: 2px 8px; border-radius: 8px; }
+
 /* ARCHIWUM / HISTORIA */
 .arch { padding: 12px 14px; margin-bottom: 8px; }
 .arch details { margin-top: 6px; }

@@ -1,6 +1,6 @@
 // Service Worker, działanie offline
 // Strategia: najpierw sieć (nowa wersja wchodzi od razu), bez zasięgu z pamięci.
-const CACHE = 'banery-rm-v1';
+const CACHE = 'banery-rm-v2';
 const FILES = ['./', './index.html', './style.css', './app.js', './config.js', './manifest.json', './logo.png',
   './vendor/supabase.js', 
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
