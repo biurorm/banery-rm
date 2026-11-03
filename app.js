@@ -2,7 +2,7 @@
 // Dane w bazie Zadań RM (Supabase, to samo logowanie). Bez config.js albo z ?proba: tryb próbny w tej przeglądarce.
 // Zapis objazdu robi baza jedną funkcją (setup.sql + setup-v2.sql, public.banery_objazd), ona też zakłada zadania przy problemach.
 // v2: banery marketingowe (miejsce, nie oferta), zdjęcia (Storage „banery”), najkrótsza trasa objazdu z km do Kilometrówki.
-const WERSJA = 'v3';
+const WERSJA = 'v4';
 
 const TYPY = { oferta: ['🏡', 'Oferta'], marketing: ['📣', 'Marketingowy'] };
 const RODZAJE = { '3d': ['🧊', 'Baner 3D'], oczka: ['🔘', 'Baner z oczkami'], stelaz: ['🪧', 'Baner na stelażu'], tabliczka: ['🏷️', 'Tabliczka'] };
@@ -618,7 +618,7 @@ function rysujSzczegoly(b) {
       ${wiersz('Montował(a)', esc(kto(b)))}${wiersz('Zamontowany', dataPL(b.zamontowano) + (b.aktywny ? `, wisi ${dniOd(b.zamontowano)} dni` : ''))}
       ${wiersz('Ostatni objazd', b.sprawdzono ? `${dataPL(b.sprawdzono)}, ${esc(imie(b.sprawdzil))}: ${STANY[b.stan].join(' ')}` : 'jeszcze nie')}
       ${wiersz('Uwagi z objazdu', problem(b) ? esc(b.stan_uwagi) : '')}
-      ${wiersz('GPS', b.lat ? 'zapisane miejsce' : '')}${wiersz('Uwagi', esc(b.uwagi))}
+      ${wiersz('GPS', b.lat ? `<a href="https://www.google.com/maps?q=${b.lat},${b.lng}" target="_blank" rel="noopener">📌 ${b.lat}, ${b.lng}</a>` : '')}${wiersz('Uwagi', esc(b.uwagi))}
       ${b.aktywny ? '' : wiersz('Zdjęty', `${dataPL(b.zdjeto)}, ${esc(POWODY[b.zdjeto_powod]?.[1] || '')}, ${esc(b.zdjal ? imie(b.zdjal) : '')}`) + wiersz('Uwagi przy zdjęciu', esc(b.zdjeto_uwagi))}
     </div>
     ${b.aktywny ? `<div class="ark-przyciski">
@@ -665,6 +665,8 @@ function rysujFormularz(b) {
     <div class="grid2"><label>Data montażu <input type="date" id="f-data" value="${b.zamontowano}" max="${dzis()}"></label>
     <label>Ile sztuk <input type="number" id="f-ile" min="1" max="20" value="${b.ile}" inputmode="numeric"></label></div>
     <button type="button" class="btn btn-ghost" data-akcja="gps">📍 ${b.lat ? 'Miejsce zapisane. Zapisz od nowa tutaj' : 'Jestem przy banerze, zapisz miejsce z GPS'}</button>
+    <label style="margin-top:10px">📌 Albo wklej pinezkę z mapy <input type="text" id="f-pin" autocomplete="off" spellcheck="false" placeholder="link z Map Google albo np. 54.18702, 19.40336"></label>
+    <div class="small muted" id="f-pin-info" style="margin:-4px 0 10px">${b.lat ? `Zapisane: <a href="https://www.google.com/maps?q=${b.lat},${b.lng}" target="_blank" rel="noopener">${b.lat}, ${b.lng}</a>. Wklej nową pinezkę, żeby zmienić.` : 'W Mapach Google przytrzymaj palec w miejscu baneru, skopiuj liczby z góry ekranu (albo link z „Udostępnij”) i wklej tutaj.'}</div>
     <div class="foto-pole">
       <a class="foto-duze" id="f-foto-podglad" target="_blank" rel="noopener" hidden><img alt="Zdjęcie baneru"></a>
       <label class="btn btn-ghost btn-link">📷 ${b.zdjecie ? 'Zrób nowe zdjęcie baneru' : 'Zrób zdjęcie baneru'}<input type="file" accept="image/*" capture="environment" id="f-foto" hidden></label>
@@ -718,12 +720,72 @@ function zapiszGps(btn) {
   navigator.geolocation.getCurrentPosition((p) => {
     const f = $('#f-baner'); if (!f) return;
     f.dataset.lat = p.coords.latitude.toFixed(6); f.dataset.lng = p.coords.longitude.toFixed(6);
+    const pin = $('#f-pin'); if (pin) pin.value = '';
     btn.disabled = false; btn.textContent = `📍 Miejsce złapane (dokładność ok. ${Math.round(p.coords.accuracy)} m)`;
   }, (err) => {
     btn.disabled = false; btn.textContent = '📍 Jestem przy banerze, zapisz miejsce z GPS';
     toast(err.code === 1 ? 'Brak zgody na lokalizację, włącz ją w ustawieniach przeglądarki' : 'Nie udało się złapać GPS, spróbuj na zewnątrz', 5000);
   }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
 }
+
+// ===================== PINEZKA Z MAPY =====================
+// Rozpoznaje: link Map Google (pinezka !3d!4d, q=/query=/ll=/destination=, @widok), geo:, Apple Maps, same liczby (kropka albo przecinek), stopnie 54°11'13.3"N 19°24'12.1"E.
+const W_PL = (la, lo) => la > 48.9 && la < 55 && lo > 14 && lo < 24.3;
+function czytajPinezke(tekst) {
+  let t = String(tekst || '').trim(); if (!t) return null;
+  try { t = decodeURIComponent(t.replace(/\+/g, ' ')); } catch (e) {}
+  const L = '(-?\\d{1,3}\\.\\d+)', P = '\\s*,\\s*';
+  const wzory = [
+    new RegExp(`!3d${L}!4d${L}`),                                           // dokładne miejsce pinezki w linku miejsca
+    new RegExp(`[?&](?:q|query|ll|sll|destination|daddr|center)=(?:loc:)?${L}${P}${L}`),
+    new RegExp(`geo:${L}${P}${L}`),
+    new RegExp(`/(?:place|search|dir/[^/]*)/${L}${P}${L}`),
+    new RegExp(`@${L}${P}${L}`),                                              // środek widoku, gdy nic lepszego
+    new RegExp(`^${L}\\s*[,; ]\\s*${L}$`),
+    /^(-?\d{1,3},\d+)\s*[; ]\s*,?\s*(-?\d{1,3},\d+)$/,                        // 54,18702 19,40336
+    /^(-?\d{1,3},\d+),\s+(-?\d{1,3},\d+)$/                                    // 54,18702, 19,40336
+  ];
+  let la = null, lo = null;
+  for (const w of wzory) { const m = t.match(w); if (m) { la = parseFloat(m[1].replace(',', '.')); lo = parseFloat(m[2].replace(',', '.')); break; } }
+  if (la === null) { // stopnie, minuty, sekundy
+    const s = '(\\d{1,3})°\\s*(\\d{1,2})[\'′]\\s*([\\d.,]+)["″]?\\s*([NSEW])';
+    const m = t.match(new RegExp(`${s}\\s*,?\\s*${s}`, 'i'));
+    if (m) {
+      const st = (d, mi, se, k) => (Number(d) + Number(mi) / 60 + parseFloat(se.replace(',', '.')) / 3600) * (/[SW]/i.test(k) ? -1 : 1);
+      const a = st(m[1], m[2], m[3], m[4]), b = st(m[5], m[6], m[7], m[8]);
+      [la, lo] = /[NS]/i.test(m[4]) ? [a, b] : [b, a];
+    }
+  }
+  if (la === null || !isFinite(la) || !isFinite(lo)) return null;
+  if (!W_PL(la, lo) && W_PL(lo, la)) [la, lo] = [lo, la]; // ktoś wkleił odwrotnie
+  if (Math.abs(la) > 90 || Math.abs(lo) > 180) return null;
+  return { lat: +la.toFixed(6), lng: +lo.toFixed(6), wPolsce: W_PL(la, lo) };
+}
+async function adresZPinezki(p) { // podpowiedź adresu, tylko gdy pole puste
+  try {
+    const r = await fetch(`https://photon.komoot.io/reverse?lat=${p.lat}&lon=${p.lng}&limit=1`);
+    const w = (await r.json()).features?.[0]?.properties; if (!w) return '';
+    const ulica = [w.street || w.name, w.housenumber].filter(Boolean).join(' ');
+    return [ulica, w.city || w.town || w.village || w.locality].filter(Boolean).join(', ');
+  } catch (e) { return ''; }
+}
+$('#arkusz').addEventListener('input', async (e) => {
+  if (e.target.id !== 'f-pin') return;
+  const f = $('#f-baner'), info = $('#f-pin-info'), t = e.target.value.trim();
+  if (!t) return;
+  const p = czytajPinezke(t);
+  if (!p) {
+    info.innerHTML = /goo\.gl|maps\.app/i.test(t)
+      ? '⚠️ Skrócony link (maps.app.goo.gl) nie zdradza współrzędnych. Otwórz go, przytrzymaj palec na pinezce, skopiuj liczby z góry ekranu i wklej je tutaj.'
+      : '⚠️ Nie widzę tu współrzędnych. Wklej liczby z Map (np. 54.18702, 19.40336) albo pełny link z przeglądarki.';
+    return;
+  }
+  f.dataset.lat = p.lat; f.dataset.lng = p.lng;
+  const gps = f.querySelector('[data-akcja="gps"]'); if (gps) gps.textContent = '📍 Miejsce z pinezki. Zapisz z GPS zamiast tego';
+  info.innerHTML = `✅ Pinezka: <a href="https://www.google.com/maps?q=${p.lat},${p.lng}" target="_blank" rel="noopener">${p.lat}, ${p.lng}</a> (sprawdź na mapie)${p.wPolsce ? '' : '. ⚠️ To poza Polską, sprawdź liczby'}`;
+  const adres = $('#f-adres');
+  if (adres && !adres.value.trim()) { const a = await adresZPinezki(p); if (a && !adres.value.trim()) { adres.value = a; toast('Adres podpowiedziany z pinezki, popraw, jeśli trzeba'); } }
+});
 
 $('#arkusz').addEventListener('submit', async (e) => {
   e.preventDefault();
