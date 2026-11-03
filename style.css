@@ -197,3 +197,11 @@ input[type=number] { display: block; width: 100%; margin-top: 4px; padding: 11px
   .obj-btn { font-size: 13px; }
   .kafle-4 .kafel span { font-size: 11px; }
 }
+/* v3: wybór banerów do trasy */
+.wybor-lista { margin: 4px 0 12px; }
+.wybor { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--border); padding: 9px 2px; cursor: pointer; font-family: inherit; color: var(--text); }
+.wybor:last-child { border-bottom: 0; }
+.wybor-box { flex: none; width: 24px; height: 24px; border: 2px solid var(--border); border-radius: 7px; display: grid; place-items: center; font-weight: 700; color: #fff; font-size: 15px; }
+.wybor.on .wybor-box { background: var(--brand); border-color: var(--brand); }
+details.trasa-poza summary { cursor: pointer; color: var(--brand); font-weight: 700; padding: 4px 0; }
+details.trasa-poza .chips { margin-top: 8px; }

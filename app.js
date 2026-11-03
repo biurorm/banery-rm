@@ -2,7 +2,7 @@
 // Dane w bazie Zadań RM (Supabase, to samo logowanie). Bez config.js albo z ?proba: tryb próbny w tej przeglądarce.
 // Zapis objazdu robi baza jedną funkcją (setup.sql + setup-v2.sql, public.banery_objazd), ona też zakłada zadania przy problemach.
 // v2: banery marketingowe (miejsce, nie oferta), zdjęcia (Storage „banery”), najkrótsza trasa objazdu z km do Kilometrówki.
-const WERSJA = 'v2';
+const WERSJA = 'v3';
 
 const TYPY = { oferta: ['🏡', 'Oferta'], marketing: ['📣', 'Marketingowy'] };
 const RODZAJE = { '3d': ['🧊', 'Baner 3D'], oczka: ['🔘', 'Baner z oczkami'], stelaz: ['🪧', 'Baner na stelażu'], tabliczka: ['🏷️', 'Tabliczka'] };
@@ -132,11 +132,14 @@ const problem = (b) => b.stan !== 'ok';
 const nawigacja = (b) => 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(b.lat ? `${b.lat},${b.lng}` : b.adres || b.nieruchomosc);
 
 // szkic objazdu: zostaje na tym telefonie, gdy aplikacja się zamknie w trakcie jazdy
-// (stany, zdjęcia zrobione w trasie i punkty usunięte z trasy)
-const piszSzkic = () => { piszLS('bn-objazd', S.szkic); piszLS('bn-objazd-foto', S.szkicFoto); piszLS('bn-trasa-bez', S.bezTrasy); };
+// (stany, zdjęcia zrobione w trasie, banery wybrane do trasy i czy wybór zatwierdzony)
+const piszSzkic = () => { piszLS('bn-objazd', S.szkic); piszLS('bn-objazd-foto', S.szkicFoto); piszLS('bn-trasa-wybor', S.wybor); piszLS('bn-trasa-zatw', S.trasaOk); };
 S.szkic = czytajLS('bn-objazd', {});
 S.szkicFoto = czytajLS('bn-objazd-foto', {});
-S.bezTrasy = czytajLS('bn-trasa-bez', []);
+S.wybor = czytajLS('bn-trasa-wybor', []);
+S.trasaOk = czytajLS('bn-trasa-zatw', false);
+try { localStorage.removeItem('bn-trasa-bez'); } catch (e) {} // v2: lista wykluczeń, od v3 wybór ręczny
+const nowyObjazd = () => { S.szkic = {}; S.szkicFoto = {}; S.wybor = []; S.trasaOk = false; S.szkicUwagi = ''; S.trasa = null; piszSzkic(); };
 
 // zdjęcia: zmniejszone na telefonie (szybciej się wysyła po komórce), linki do prywatnych plików ważne godzinę
 async function przygotujFoto(plik) {
@@ -198,7 +201,8 @@ async function odswiez() {
     const wisi = (id) => S.banery.some(b => b.id === id && b.aktywny);
     for (const id of Object.keys(S.szkic)) if (!wisi(id)) delete S.szkic[id];
     for (const id of Object.keys(S.szkicFoto)) if (!wisi(id)) delete S.szkicFoto[id];
-    S.bezTrasy = S.bezTrasy.filter(wisi);
+    S.wybor = S.wybor.filter(wisi);
+    if (!S.wybor.length) S.trasaOk = false;
     piszSzkic(); rysuj();
   } catch (e) { toast('Nie udało się wczytać: ' + e.message, 5000); }
 }
@@ -286,33 +290,77 @@ async function wspolrzedne(b) {
   } catch (e) { return null; } // bez zasięgu nie zapamiętujemy, spróbuje następnym razem
 }
 
-async function trasaOsrm(pkt) {
-  const wsp = [BIURO, ...pkt].map(p => `${p.lng.toFixed(6)},${p.lat.toFixed(6)}`).join(';');
-  const r = await fetch(`https://router.project-osrm.org/trip/v1/driving/${wsp}?source=first&roundtrip=true&overview=false`);
+// v3: kolejność liczona pod NAJMNIEJ KILOMETRÓW (nie najkrótszy czas jak OSRM trip):
+// macierz odległości drogowych z OSRM table, potem dokładne rozwiązanie do 13 punktów, powyżej najbliższy sąsiad + poprawki 2-opt i or-opt.
+const odlProsta = (a, b) => {
+  const r = Math.PI / 180, dLa = (b.lat - a.lat) * r, dLo = (b.lng - a.lng) * r;
+  const h = Math.sin(dLa / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLo / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.sqrt(h)) * 1.3;
+};
+async function macierzOsrm(pts) {
+  const wsp = pts.map(p => `${p.lng.toFixed(6)},${p.lat.toFixed(6)}`).join(';');
+  const r = await fetch(`https://router.project-osrm.org/table/v1/driving/${wsp}?annotations=distance,duration`);
   const j = await r.json(); if (j.code !== 'Ok') throw new Error(j.code);
-  const t = j.trips[0];
-  // waypoints[i].waypoint_index = które miejsce w trasie ma i-ty punkt (0 = biuro); legs[k] = odcinek do k+1. punktu
-  const kolejnosc = pkt.map((p, i) => ({ ...p, poz: j.waypoints[i + 1].waypoint_index })).sort((a, b) => a.poz - b.poz);
-  kolejnosc.forEach((p, k) => { p.km = t.legs[k].distance / 1000; });
-  return { kolejnosc, km: t.distance / 1000, min: Math.round(t.duration / 60), powrot: t.legs[t.legs.length - 1].distance / 1000 };
+  // brak drogi między punktami (null) = szacunek po prostej
+  const d = j.distances.map((w, i) => w.map((x, k) => x == null ? odlProsta(pts[i], pts[k]) : x / 1000));
+  const t = j.durations.map(w => w.map(x => x == null ? 0 : x / 60));
+  return { d, t };
 }
-function trasaSzacunkowa(pkt) {
-  const odl = (a, b) => {
-    const r = Math.PI / 180, dLa = (b.lat - a.lat) * r, dLo = (b.lng - a.lng) * r;
-    const h = Math.sin(dLa / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLo / 2) ** 2;
-    return 2 * 6371 * Math.asin(Math.sqrt(h)) * 1.3;
-  };
-  const zostaly = [...pkt], kolejnosc = []; let tu = BIURO, km = 0;
-  while (zostaly.length) { // zawsze do najbliższego
-    let n = 0; zostaly.forEach((p, i) => { if (odl(tu, p) < odl(tu, zostaly[n])) n = i; });
-    const p = { ...zostaly.splice(n, 1)[0] }; p.km = odl(tu, p); km += p.km; kolejnosc.push(p); tu = p;
+const macierzProsta = (pts) => ({ d: pts.map(a => pts.map(b => odlProsta(a, b))), t: null });
+
+// d[i][k] w km, 0 = biuro; wynik: kolejność punktów 1..n-1 (pętla z biura do biura)
+function najmniejKm(d) {
+  const m = d.length - 1; if (m <= 1) return m ? [1] : [];
+  const dl = (o) => o.reduce((s, v, i) => s + d[i ? o[i - 1] : 0][v], 0) + d[o[o.length - 1]][0];
+  if (m <= 13) { // dokładnie (Held-Karp)
+    const N = 1 << m, dp = new Float64Array(N * m).fill(Infinity), sk = new Int8Array(N * m).fill(-1);
+    for (let j = 0; j < m; j++) dp[(1 << j) * m + j] = d[0][j + 1];
+    for (let s = 1; s < N; s++) for (let j = 0; j < m; j++) {
+      const v = dp[s * m + j]; if (!(s & (1 << j)) || v === Infinity) continue;
+      for (let k = 0; k < m; k++) {
+        if (s & (1 << k)) continue;
+        const s2 = s | (1 << k), w = v + d[j + 1][k + 1];
+        if (w < dp[s2 * m + k]) { dp[s2 * m + k] = w; sk[s2 * m + k] = j; }
+      }
+    }
+    let s = N - 1, j = 0, best = Infinity;
+    for (let k = 0; k < m; k++) { const w = dp[s * m + k] + d[k + 1][0]; if (w < best) { best = w; j = k; } }
+    const o = [];
+    while (j >= 0) { o.unshift(j + 1); const p = sk[s * m + j]; s &= ~(1 << j); j = p; }
+    return o;
   }
-  const powrot = odl(tu, BIURO);
-  return { kolejnosc, km: km + powrot, min: null, powrot, szacunek: true };
+  // dużo punktów: najbliższy sąsiad, potem poprawki aż nic nie skraca
+  const zost = new Set(Array.from({ length: m }, (_, i) => i + 1)); let o = [], tu = 0;
+  while (zost.size) { let n = null; zost.forEach(k => { if (n === null || d[tu][k] < d[tu][n]) n = k; }); o.push(n); zost.delete(n); tu = n; }
+  let akt = dl(o), lepiej = true;
+  while (lepiej) {
+    lepiej = false;
+    for (let i = 0; i < m - 1; i++) for (let k = i + 1; k < m; k++) { // 2-opt: odwróć odcinek
+      const n = [...o.slice(0, i), ...o.slice(i, k + 1).reverse(), ...o.slice(k + 1)], w = dl(n);
+      if (w < akt - 1e-9) { o = n; akt = w; lepiej = true; }
+    }
+    for (let i = 0; i < m; i++) for (let k = 0; k < m; k++) { // or-opt: przenieś jeden punkt
+      if (i === k) continue;
+      const n = [...o]; const [x] = n.splice(i, 1); n.splice(k, 0, x); const w = dl(n);
+      if (w < akt - 1e-9) { o = n; akt = w; lepiej = true; }
+    }
+  }
+  return o;
+}
+
+async function ulozTrase(pkt) {
+  const pts = [BIURO, ...pkt];
+  let M, szacunek = false;
+  try { M = await macierzOsrm(pts); } catch (e) { M = macierzProsta(pts); szacunek = true; }
+  const o = najmniejKm(M.d);
+  let tu = 0, km = 0, min = 0;
+  const kolejnosc = o.map(i => { const p = { ...pkt[i - 1], km: M.d[tu][i] }; km += p.km; if (M.t) min += M.t[tu][i]; tu = i; return p; });
+  const powrot = M.d[tu][0]; km += powrot; if (M.t) min += M.t[tu][0];
+  return { kolejnosc, km, min: M.t ? Math.round(min) : null, powrot, szacunek };
 }
 
 async function liczTrase() {
-  const W = wisza().filter(b => !S.bezTrasy.includes(b.id));
+  const W = wisza().filter(b => S.wybor.includes(b.id));
   const klucz = W.map(b => `${b.id}:${b.lat || ''}:${b.adres}`).sort().join('|');
   if (S.trasa?.klucz === klucz) return;
   const nr = liczTrase.nr = (liczTrase.nr || 0) + 1;
@@ -321,7 +369,7 @@ async function liczTrase() {
   for (const b of W) { const w = await wspolrzedne(b); if (w) pkt.push({ b, ...w }); else bezAdresu.push(b); }
   if (nr !== liczTrase.nr) return;
   let wynik = { kolejnosc: [], km: 0, min: 0, powrot: 0 };
-  if (pkt.length) try { wynik = await trasaOsrm(pkt); } catch (e) { wynik = trasaSzacunkowa(pkt); }
+  if (pkt.length) wynik = await ulozTrase(pkt);
   if (nr !== liczTrase.nr) return;
   S.trasa = { klucz, bezAdresu, ...wynik };
   if (zakladka === 'objazd') rysuj();
@@ -341,20 +389,42 @@ function linkiMap(kolejnosc) {
 const kmDoKilometrowki = (t) => Math.ceil(t.km);
 const opisPrzejazdu = (t) => `Objazd banerów: biuro, ${t.kolejnosc.map(p => p.b.adres || p.b.nieruchomosc).join(', ')}, powrót do biura (${kmDoKilometrowki(t)} km)`;
 
+// KROK 1: wybór banerów do objazdu (nie zawsze jedziemy do wszystkich), KROK 2: po zatwierdzeniu trasa pod najmniej km
+function rysujWybor() {
+  const W = wisza().slice().sort((a, b) => (a.adres || a.nieruchomosc).localeCompare(b.adres || b.nieruchomosc, 'pl'));
+  const wyb = new Set(S.wybor), n = W.filter(b => wyb.has(b.id)).length;
+  const nDawno = W.filter(b => !problem(b) && dawno(b)).length, nProb = W.filter(problem).length;
+  return `<div class="card trasa">
+    <div class="row-between"><b>🗺️ Trasa objazdu: wybierz banery</b><span class="small muted">wybrane ${n} z ${W.length}</span></div>
+    <div class="small muted" style="margin-top:4px">Zaznacz, do których banerów jedziesz. Po zatwierdzeniu ułożę kolejność z najmniejszą liczbą kilometrów (start i meta: biuro).</div>
+    <div class="chips" style="margin-top:8px">
+      <button type="button" class="chip chip-mala" data-wybierz-grupa="wszystkie">Wszystkie (${W.length})</button>
+      ${nDawno ? `<button type="button" class="chip chip-mala" data-wybierz-grupa="dawno">⏳ Do sprawdzenia (${nDawno})</button>` : ''}
+      ${nProb ? `<button type="button" class="chip chip-mala" data-wybierz-grupa="problemy">⚠️ Do naprawy (${nProb})</button>` : ''}
+      ${n ? '<button type="button" class="link" data-wybierz-grupa="nic">odznacz wszystkie</button>' : ''}
+    </div>
+    <div class="wybor-lista">${W.map(b => `<button type="button" class="wybor${wyb.has(b.id) ? ' on' : ''}" data-wybierz="${b.id}" aria-pressed="${wyb.has(b.id)}">
+      <span class="wybor-box">${wyb.has(b.id) ? '✓' : ''}</span>
+      <span class="trasa-t"><b>${b.typ === 'marketing' ? '📣 ' : ''}${esc(b.nieruchomosc)}</b>
+        <small>${esc(b.adres || 'adres niewpisany')}${problem(b) ? ' · ⚠️ do naprawy' : dawno(b) ? ' · ⏳ do sprawdzenia' : ''}</small></span></button>`).join('')}</div>
+    <button type="button" class="btn btn-main btn-big" data-akcja="zatwierdz-trase"${n ? '' : ' disabled'}>✓ Zatwierdź i ułóż trasę${n ? ` (${n})` : ''}</button>
+  </div>`;
+}
+
 function rysujTrase() {
+  if (!S.trasaOk) return rysujWybor();
   const t = S.trasa, W = wisza();
-  const usuniete = W.filter(b => S.bezTrasy.includes(b.id));
-  const naglowek = `<div class="row-between"><b>🗺️ Trasa objazdu</b><span class="small muted">start i meta: biuro</span></div>`;
-  const stopka = usuniete.length ? `<div class="small muted trasa-poza">Usunięte z trasy (${usuniete.length}):</div>
-      <div class="chips">${usuniete.map(b => `<button type="button" class="chip chip-mala" data-do-trasy="${b.id}">↩️ ${esc(b.nieruchomosc)}</button>`).join('')}
-      ${usuniete.length > 1 ? '<button type="button" class="link" data-akcja="cala-trasa">przywróć wszystkie</button>' : ''}</div>` : '';
-  if (!t || t.liczy) return `<div class="card trasa">${naglowek}<div class="small muted" style="margin-top:8px">Układam najkrótszą trasę…</div>${stopka}</div>`;
-  if (!t.kolejnosc.length) return `<div class="card trasa">${naglowek}<div class="small muted" style="margin-top:8px">${usuniete.length ? 'Wszystkie punkty usunięte z trasy.' : 'Żaden baner nie ma adresu ani GPS, nie ma z czego ułożyć trasy.'}</div>${stopka}</div>`;
+  const poza = W.filter(b => !S.wybor.includes(b.id));
+  const naglowek = `<div class="row-between"><b>🗺️ Trasa objazdu</b><button type="button" class="link" data-akcja="zmien-wybor">✏️ zmień wybór</button></div>`;
+  const stopka = poza.length ? `<details class="trasa-poza"><summary class="small">➕ Dodaj baner do trasy (${poza.length} poza trasą)</summary>
+      <div class="chips">${poza.map(b => `<button type="button" class="chip chip-mala" data-do-trasy="${b.id}">➕ ${esc(b.nieruchomosc)}</button>`).join('')}</div></details>` : '';
+  if (!t || t.liczy) return `<div class="card trasa">${naglowek}<div class="small muted" style="margin-top:8px">Układam trasę z najmniejszą liczbą kilometrów…</div>${stopka}</div>`;
+  if (!t.kolejnosc.length) return `<div class="card trasa">${naglowek}<div class="small muted" style="margin-top:8px">Wybrane banery nie mają adresu ani GPS, nie ma z czego ułożyć trasy.</div>${stopka}</div>`;
   const czesci = linkiMap(t.kolejnosc);
   return `<div class="card trasa">${naglowek}
     <div class="km-box">
       <div><span>Do Kilometrówki</span><b>${kmDoKilometrowki(t)} km</b>
-        <small>${t.szacunek ? 'szacunek, serwer tras nie odpowiedział' : `cała pętla ${kmTxt(t.km)} km${t.min ? `, jazdy ok. ${t.min} min` : ''}`}</small></div>
+        <small>${t.szacunek ? 'szacunek, serwer tras nie odpowiedział' : `najmniej km: cała pętla ${kmTxt(t.km)} km${t.min ? `, jazdy ok. ${t.min} min` : ''}`}</small></div>
       <button type="button" class="btn btn-ghost" data-akcja="kopiuj-km">📋 Kopiuj opis</button>
     </div>
     <ol class="trasa-lista">
@@ -375,9 +445,9 @@ function rysujObjazd() {
   const sz = S.szkic, zrobione = W.filter(b => sz[b.id]).length;
   const ost = S.objazdy[0];
   if (!W.length) { $('#objazd-tresc').innerHTML = '<div class="pusto">Żaden baner teraz nie wisi, nie ma czego objeżdżać.</div>'; rysujHistorie(); return; }
-  liczTrase();
+  if (S.trasaOk) liczTrase();
   // lista do sprawdzania idzie w kolejności trasy, punkty spoza trasy na końcu
-  const poz = {}; (S.trasa?.kolejnosc || []).forEach((p, i) => { poz[p.b.id] = i + 1; });
+  const poz = {}; if (S.trasaOk && !S.trasa?.liczy) (S.trasa?.kolejnosc || []).forEach((p, i) => { poz[p.b.id] = i + 1; });
   const lista = W.slice().sort((a, b) => (poz[a.id] || 999) - (poz[b.id] || 999) || (a.adres || a.nieruchomosc).localeCompare(b.adres || b.nieruchomosc, 'pl'));
   const proc = Math.round(zrobione / W.length * 100);
 
@@ -421,15 +491,26 @@ $('#objazd-tresc').addEventListener('click', async (e) => {
     piszSzkic(); rysujObjazd();
     if (S.szkic[id] && S.szkic[id].stan !== 'ok') setTimeout(() => $(`[data-id="${id}"] .obj-uwagi`)?.focus(), 30);
   }
-  if (b.dataset.bezTrasy) { S.bezTrasy.push(b.dataset.bezTrasy); piszSzkic(); rysujObjazd(); }
-  if (b.dataset.doTrasy) { S.bezTrasy = S.bezTrasy.filter(id => id !== b.dataset.doTrasy); piszSzkic(); rysujObjazd(); }
-  if (b.dataset.akcja === 'cala-trasa') { S.bezTrasy = []; piszSzkic(); rysujObjazd(); }
+  // wybór banerów do trasy, zatwierdzenie, zmiany po zatwierdzeniu (trasa liczy się od nowa sama)
+  if (b.dataset.wybierz) {
+    const id = b.dataset.wybierz;
+    S.wybor = S.wybor.includes(id) ? S.wybor.filter(x => x !== id) : [...S.wybor, id]; piszSzkic(); rysujObjazd();
+  }
+  if (b.dataset.wybierzGrupa) {
+    const g = b.dataset.wybierzGrupa, W = wisza();
+    const grupa = g === 'wszystkie' ? W : g === 'dawno' ? W.filter(x => !problem(x) && dawno(x)) : g === 'problemy' ? W.filter(problem) : [];
+    S.wybor = g === 'nic' ? [] : [...new Set([...S.wybor, ...grupa.map(x => x.id)])]; piszSzkic(); rysujObjazd();
+  }
+  if (b.dataset.akcja === 'zatwierdz-trase' && S.wybor.length) { S.trasaOk = true; S.trasa = null; piszSzkic(); rysujObjazd(); window.scrollTo(0, 0); }
+  if (b.dataset.akcja === 'zmien-wybor') { S.trasaOk = false; piszSzkic(); rysujObjazd(); }
+  if (b.dataset.bezTrasy) { S.wybor = S.wybor.filter(id => id !== b.dataset.bezTrasy); if (!S.wybor.length) S.trasaOk = false; piszSzkic(); rysujObjazd(); }
+  if (b.dataset.doTrasy) { S.wybor = [...S.wybor, b.dataset.doTrasy]; piszSzkic(); rysujObjazd(); }
   if (b.dataset.akcja === 'kopiuj-km' && S.trasa?.kolejnosc) {
     const txt = opisPrzejazdu(S.trasa);
     try { await navigator.clipboard.writeText(txt); toast(`Skopiowane. W Kilometrówce wklej jako cel, km: ${kmDoKilometrowki(S.trasa)}`, 4500); }
     catch (err) { prompt('Skopiuj opis przejazdu:', txt); }
   }
-  if (b.dataset.akcja === 'wyczysc') { S.szkic = {}; S.szkicFoto = {}; S.bezTrasy = []; S.szkicUwagi = ''; piszSzkic(); rysujObjazd(); }
+  if (b.dataset.akcja === 'wyczysc') { nowyObjazd(); rysujObjazd(); }
   if (b.dataset.akcja === 'zapisz-objazd') {
     const W = wisza();
     const bezStanu = Object.keys(S.szkicFoto).filter(id => !S.szkic[id] && W.some(x => x.id === id));
@@ -443,7 +524,7 @@ $('#objazd-tresc').addEventListener('click', async (e) => {
     b.disabled = true;
     try {
       await DB.objazd(wynik, (S.szkicUwagi || '').trim());
-      S.szkic = {}; S.szkicFoto = {}; S.bezTrasy = []; S.szkicUwagi = ''; piszSzkic(); document.activeElement?.blur?.();
+      nowyObjazd(); document.activeElement?.blur?.();
       toast(nProb ? `Objazd zapisany. Problemy: ${nProb}, nowe trafiły do Zadań RM` : 'Objazd zapisany, wszystko wisi', 4500);
       await odswiez(); window.scrollTo(0, 0);
     } catch (err) { toast('Nie zapisało się: ' + err.message, 5000); b.disabled = false; }
