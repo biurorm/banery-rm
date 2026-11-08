@@ -2,7 +2,7 @@
 // Dane w bazie Zadań RM (Supabase, to samo logowanie). Bez config.js albo z ?proba: tryb próbny w tej przeglądarce.
 // Zapis objazdu robi baza jedną funkcją (setup.sql + setup-v2.sql, public.banery_objazd), ona też zakłada zadania przy problemach.
 // v2: banery marketingowe (miejsce, nie oferta), zdjęcia (Storage „banery”), najkrótsza trasa objazdu z km do Kilometrówki.
-const WERSJA = 'v4';
+const WERSJA = 'v5';
 
 const TYPY = { oferta: ['🏡', 'Oferta'], marketing: ['📣', 'Marketingowy'] };
 const RODZAJE = { '3d': ['🧊', 'Baner 3D'], oczka: ['🔘', 'Baner z oczkami'], stelaz: ['🪧', 'Baner na stelażu'], tabliczka: ['🏷️', 'Tabliczka'] };
@@ -467,6 +467,7 @@ function rysujObjazd() {
         ${r && r.stan !== 'ok' ? `<input type="text" class="obj-uwagi" maxlength="300" value="${esc(r.uwagi)}" placeholder="${r.stan === 'brak' ? 'np. zerwany, zabrał właściciel' : 'np. naderwane oczko, wyblakły'}">` : ''}
         <div class="obj-foto">
           <label class="obj-foto-btn">📷 ${foto ? 'Zrób inne zdjęcie' : 'Zrób zdjęcie'}<input type="file" accept="image/*" capture="environment" data-foto="${b.id}" hidden></label>
+          <label class="obj-foto-btn">🖼️ Z galerii<input type="file" accept="image/*" data-foto="${b.id}" hidden></label>
           ${foto ? `<a class="miniatura" data-podglad="${b.id}" target="_blank" rel="noopener"${S.podglad[b.id] ? ` href="${S.podglad[b.id]}"` : ' hidden'}><img alt="zdjęcie z objazdu"${S.podglad[b.id] ? ` src="${S.podglad[b.id]}"` : ''}></a><span class="small ok-txt">zdjęcie dodane</span>` : ''}
         </div>
       </div>`;
@@ -670,6 +671,7 @@ function rysujFormularz(b) {
     <div class="foto-pole">
       <a class="foto-duze" id="f-foto-podglad" target="_blank" rel="noopener" hidden><img alt="Zdjęcie baneru"></a>
       <label class="btn btn-ghost btn-link">📷 ${b.zdjecie ? 'Zrób nowe zdjęcie baneru' : 'Zrób zdjęcie baneru'}<input type="file" accept="image/*" capture="environment" id="f-foto" hidden></label>
+      <label class="btn btn-ghost btn-link">🖼️ Dodaj zdjęcie z galerii<input type="file" accept="image/*" id="f-foto-galeria" hidden></label>
     </div>
     <label style="margin-top:10px">Uwagi <input type="text" id="f-uwagi" maxlength="500" value="${esc(b.uwagi)}" placeholder="np. zgoda wspólnoty do końca roku, trytytki 4 szt."></label>
     <button class="btn btn-main" type="submit">${nowy ? 'Dodaj' : 'Zapisz'}</button>
@@ -680,7 +682,7 @@ function rysujFormularz(b) {
 const NAZWA_TYPU = { oferta: ['Nieruchomość (oferta)', 'np. Słoneczna 15B, mieszkanie 90 m²'], marketing: ['Miejsce (nazwa)', 'np. ogrodzenie przy Kauflandzie, Płk. Dąbka'] };
 function otworzFormularz(b) { S.otwarty = { id: b?.id || null, form: true }; S.noweFoto = null; rysujFormularz(b); otworzArkusz(); setTimeout(() => !b && $('#f-nier')?.focus(), 80); }
 $('#arkusz').addEventListener('change', async (e) => {
-  if (e.target.id !== 'f-foto' || !e.target.files?.[0]) return;
+  if ((e.target.id !== 'f-foto' && e.target.id !== 'f-foto-galeria') || !e.target.files?.[0]) return;
   S.noweFoto = await przygotujFoto(e.target.files[0]);
   const a = $('#f-foto-podglad'), url = URL.createObjectURL(S.noweFoto);
   a.querySelector('img').src = url; a.href = url; a.hidden = false;
