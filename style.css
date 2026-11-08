@@ -205,3 +205,9 @@ input[type=number] { display: block; width: 100%; margin-top: 4px; padding: 11px
 .wybor.on .wybor-box { background: var(--brand); border-color: var(--brand); }
 details.trasa-poza summary { cursor: pointer; color: var(--brand); font-weight: 700; padding: 4px 0; }
 details.trasa-poza .chips { margin-top: 8px; }
+
+/* v6: kilka zdjęć */
+.galeria { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 10px; }
+.miniatura-nowa { position: relative; display: inline-block; }
+.miniatura-nowa img { display: block; width: 64px; height: 64px; object-fit: cover; border-radius: 8px; }
+.miniatura-x { position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; border-radius: 11px; border: 0; background: #c0392b; color: #fff; font-size: 12px; line-height: 22px; padding: 0; cursor: pointer; }

@@ -2,7 +2,7 @@
 // Dane w bazie Zadań RM (Supabase, to samo logowanie). Bez config.js albo z ?proba: tryb próbny w tej przeglądarce.
 // Zapis objazdu robi baza jedną funkcją (setup.sql + setup-v2.sql, public.banery_objazd), ona też zakłada zadania przy problemach.
 // v2: banery marketingowe (miejsce, nie oferta), zdjęcia (Storage „banery”), najkrótsza trasa objazdu z km do Kilometrówki.
-const WERSJA = 'v5';
+const WERSJA = 'v6';
 
 const TYPY = { oferta: ['🏡', 'Oferta'], marketing: ['📣', 'Marketingowy'] };
 const RODZAJE = { '3d': ['🧊', 'Baner 3D'], oczka: ['🔘', 'Baner z oczkami'], stelaz: ['🪧', 'Baner na stelażu'], tabliczka: ['🏷️', 'Tabliczka'] };
@@ -68,6 +68,11 @@ function magazynSupabase(cfg) {
       return sciezka;
     },
     async linkFoto(sciezka) { const { data, error } = await sb.storage.from('banery').createSignedUrl(sciezka, 3600); blad(error); return data.signedUrl; },
+    // wszystkie zdjęcia baneru (montaż i objazdy), najnowsze pierwsze
+    async listaFoto(banerId) {
+      const { data, error } = await sb.storage.from('banery').list(banerId, { limit: 50, sortBy: { column: 'name', order: 'desc' } }); blad(error);
+      return (data || []).filter(f => /\.jpe?g$/i.test(f.name)).map(f => `${banerId}/${f.name}`);
+    },
     nasluchuj(fn) {
       let t; const odpal = () => { clearTimeout(t); t = setTimeout(fn, 400); };
       sb.channel('rm-banery')
@@ -111,8 +116,12 @@ function magazynProbny() {
     async objazdy() { return O(); },
     async usunObjazd(oid) { pisz('bn-proba-objazdy', O().filter(o => o.id !== oid)); },
     // w próbie zdjęcie leży jako tekst (data URL) w przeglądarce
-    async wyslijFoto(_, blob) { return new Promise((ok) => { const r = new FileReader(); r.onload = () => ok(r.result); r.readAsDataURL(blob); }); },
+    async wyslijFoto(bid, blob) {
+      const url = await new Promise((ok) => { const r = new FileReader(); r.onload = () => ok(r.result); r.readAsDataURL(blob); });
+      const all = czytaj('bn-proba-foto', {}); all[bid] = [url, ...(all[bid] || [])]; pisz('bn-proba-foto', all); return url;
+    },
     async linkFoto(sciezka) { return sciezka; },
+    async listaFoto(bid) { return czytaj('bn-proba-foto', {})[bid] || []; },
     nasluchuj() {}
   };
 }
@@ -122,7 +131,7 @@ const DB = (cfg.supabaseUrl && !/[?&]proba/.test(location.search)) ? magazynSupa
 
 // ===================== STAN =====================
 const S = { user: null, profil: null, admin: false, osoby: [], banery: [], objazdy: [], filtr: 'wszystkie', szukaj: '', archFiltr: 'wszystkie', otwarty: null,
-  noweFoto: null, podglad: {}, trasa: null };
+  noweFoty: [], podglad: {}, trasa: null };
 const imie = (id) => (S.osoby.find(o => o.id === id)?.imie) || 'ktoś z zespołu';
 const kto = (b) => b.montowal ? imie(b.montowal) : (b.montowal_obcy || 'nie wpisano');
 const wisza = () => S.banery.filter(b => b.aktywny);
@@ -613,7 +622,8 @@ function rysujSzczegoly(b) {
   $('#ark-nr').textContent = (b.aktywny ? '' : 'Archiwum · ') + typ + rodzajTxt(b.rodzaj);
   const wiersz = (n, w) => w ? `<div class="dane-w"><span>${n}</span><b>${w}</b></div>` : '';
   $('#ark-tresc').innerHTML = `<div class="ark-nazwa" id="ark-tytul">${esc(b.nieruchomosc)}</div>
-    ${b.zdjecie ? `<a class="foto-duze" id="ark-foto" target="_blank" rel="noopener" hidden><img alt="Zdjęcie baneru"><span>📷 ${b.zdjecie_kiedy ? dataPL(b.zdjecie_kiedy) : 'zdjęcie'}</span></a>` : ''}
+    ${b.zdjecie ? `<a class="foto-duze" id="ark-foto" target="_blank" rel="noopener" hidden><img alt="Zdjęcie baneru"><span>📷 ${b.zdjecie_kiedy ? dataPL(b.zdjecie_kiedy) : 'zdjęcie'}</span></a>
+      <div class="galeria" id="ark-galeria" hidden></div>` : ''}
     <div class="dane">
       ${wiersz('Adres', esc(b.adres))}${wiersz('Miejsce', esc(b.miejsce))}${wiersz('Sztuk', b.ile > 1 ? b.ile : '')}
       ${wiersz('Montował(a)', esc(kto(b)))}${wiersz('Zamontowany', dataPL(b.zamontowano) + (b.aktywny ? `, wisi ${dniOd(b.zamontowano)} dni` : ''))}
@@ -631,6 +641,12 @@ function rysujSzczegoly(b) {
     : `<button class="btn btn-ghost" data-akcja="przywroc">↩️ Przywróć do wiszących (pomyłka)</button>
       ${S.admin ? '<div class="akcje-dol"><button class="link czerwony" data-akcja="usun">Usuń na stałe</button></div>' : ''}`}`;
   wstawFoto($('#ark-foto'), b.zdjecie);
+  if (b.zdjecie) DB.listaFoto(b.id).then(lista => {
+    const box = $('#ark-galeria'); if (!box || lista.length < 2 || S.otwarty?.id !== b.id) return;
+    box.innerHTML = lista.map(() => '<a class="miniatura" target="_blank" rel="noopener" hidden><img alt="zdjęcie baneru"></a>').join('');
+    box.hidden = false;
+    $$('a', box).forEach((a, i) => wstawFoto(a, lista[i]));
+  }).catch(() => {});
 }
 
 function rysujZdejmij(b) {
@@ -657,21 +673,23 @@ function rysujFormularz(b) {
     <label><span id="f-nier-tytul">${NAZWA_TYPU[typ][0]}</span> <input type="text" id="f-nier" maxlength="120" value="${esc(b.nieruchomosc)}" placeholder="${NAZWA_TYPU[typ][1]}" required></label>
     <label>Adres <input type="text" id="f-adres" maxlength="160" value="${esc(b.adres)}" placeholder="ulica, numer, miejscowość"></label>
     <label>Gdzie dokładnie wisi <input type="text" id="f-miejsce" maxlength="200" value="${esc(b.miejsce)}" placeholder="np. balkon 2 piętro od ulicy, płot od szosy"></label>
-    <div class="sekcja-tytul" style="margin-top:2px">Rodzaj</div>
-    <div class="chips" data-grupa="rodzaj">${Object.entries(RODZAJE).map(([k, [i, n]]) => `<button type="button" class="chip${b.rodzaj === k ? ' on' : ''}" data-v="${k}">${i} ${n}</button>`).join('')}</div>
+    <div class="sekcja-tytul" style="margin-top:2px">Rodzaj${nowy ? ' <span class="small muted">(możesz zaznaczyć kilka, np. 3D i z oczkami)</span>' : ''}</div>
+    <div class="chips" data-grupa="rodzaj"${nowy ? ' data-wiele="1"' : ''}>${Object.entries(RODZAJE).map(([k, [i, n]]) => `<button type="button" class="chip${b.rodzaj === k ? ' on' : ''}" data-v="${k}">${i} ${n}</button>`).join('')}</div>
     <div class="sekcja-tytul" style="margin-top:2px">Kto montował</div>
     <div class="chips" data-grupa="montowal">${S.osoby.filter(o => o.aktywny || o.id === b.montowal).map(o => `<button type="button" class="chip${!obcy && b.montowal === o.id ? ' on' : ''}" data-v="${o.id}">${esc(o.imie)}</button>`).join('')}
       <button type="button" class="chip${obcy ? ' on' : ''}" data-v="obcy">Ktoś spoza biura</button></div>
     <label id="f-obcy-box"${obcy ? '' : ' hidden'}>Kto (firma, osoba) <input type="text" id="f-obcy" maxlength="80" value="${esc(b.montowal_obcy)}" placeholder="np. właściciel, firma reklamowa"></label>
     <div class="grid2"><label>Data montażu <input type="date" id="f-data" value="${b.zamontowano}" max="${dzis()}"></label>
-    <label>Ile sztuk <input type="number" id="f-ile" min="1" max="20" value="${b.ile}" inputmode="numeric"></label></div>
+    <label id="f-ile-box">Ile sztuk <input type="number" id="f-ile" min="1" max="20" value="${b.ile}" inputmode="numeric"></label></div>
+    <div class="grid2" id="f-ile-wiele" hidden></div>
     <button type="button" class="btn btn-ghost" data-akcja="gps">📍 ${b.lat ? 'Miejsce zapisane. Zapisz od nowa tutaj' : 'Jestem przy banerze, zapisz miejsce z GPS'}</button>
     <label style="margin-top:10px">📌 Albo wklej pinezkę z mapy <input type="text" id="f-pin" autocomplete="off" spellcheck="false" placeholder="link z Map Google albo np. 54.18702, 19.40336"></label>
     <div class="small muted" id="f-pin-info" style="margin:-4px 0 10px">${b.lat ? `Zapisane: <a href="https://www.google.com/maps?q=${b.lat},${b.lng}" target="_blank" rel="noopener">${b.lat}, ${b.lng}</a>. Wklej nową pinezkę, żeby zmienić.` : 'W Mapach Google przytrzymaj palec w miejscu baneru, skopiuj liczby z góry ekranu (albo link z „Udostępnij”) i wklej tutaj.'}</div>
     <div class="foto-pole">
       <a class="foto-duze" id="f-foto-podglad" target="_blank" rel="noopener" hidden><img alt="Zdjęcie baneru"></a>
-      <label class="btn btn-ghost btn-link">📷 ${b.zdjecie ? 'Zrób nowe zdjęcie baneru' : 'Zrób zdjęcie baneru'}<input type="file" accept="image/*" capture="environment" id="f-foto" hidden></label>
-      <label class="btn btn-ghost btn-link">🖼️ Dodaj zdjęcie z galerii<input type="file" accept="image/*" id="f-foto-galeria" hidden></label>
+      <div class="galeria" id="f-foto-nowe" hidden></div>
+      <label class="btn btn-ghost btn-link">📷 Zrób zdjęcie${b.zdjecie ? ' (dojdzie do zapisanych)' : ''}<input type="file" accept="image/*" capture="environment" id="f-foto" hidden></label>
+      <label class="btn btn-ghost btn-link">🖼️ Dodaj zdjęcia z galerii (kilka naraz)<input type="file" accept="image/*" id="f-foto-galeria" multiple hidden></label>
     </div>
     <label style="margin-top:10px">Uwagi <input type="text" id="f-uwagi" maxlength="500" value="${esc(b.uwagi)}" placeholder="np. zgoda wspólnoty do końca roku, trytytki 4 szt."></label>
     <button class="btn btn-main" type="submit">${nowy ? 'Dodaj' : 'Zapisz'}</button>
@@ -680,18 +698,39 @@ function rysujFormularz(b) {
   wstawFoto($('#f-foto-podglad'), b.zdjecie);
 }
 const NAZWA_TYPU = { oferta: ['Nieruchomość (oferta)', 'np. Słoneczna 15B, mieszkanie 90 m²'], marketing: ['Miejsce (nazwa)', 'np. ogrodzenie przy Kauflandzie, Płk. Dąbka'] };
-function otworzFormularz(b) { S.otwarty = { id: b?.id || null, form: true }; S.noweFoto = null; rysujFormularz(b); otworzArkusz(); setTimeout(() => !b && $('#f-nier')?.focus(), 80); }
+function otworzFormularz(b) { S.otwarty = { id: b?.id || null, form: true }; S.noweFoty = []; rysujFormularz(b); otworzArkusz(); setTimeout(() => !b && $('#f-nier')?.focus(), 80); }
 $('#arkusz').addEventListener('change', async (e) => {
-  if ((e.target.id !== 'f-foto' && e.target.id !== 'f-foto-galeria') || !e.target.files?.[0]) return;
-  S.noweFoto = await przygotujFoto(e.target.files[0]);
-  const a = $('#f-foto-podglad'), url = URL.createObjectURL(S.noweFoto);
-  a.querySelector('img').src = url; a.href = url; a.hidden = false;
-  toast('Zdjęcie gotowe, zapisze się razem z banerem');
+  if ((e.target.id !== 'f-foto' && e.target.id !== 'f-foto-galeria') || !e.target.files?.length) return;
+  const pliki = [...e.target.files].slice(0, Math.max(0, 10 - S.noweFoty.length));
+  if (!pliki.length) { toast('Najwyżej 10 zdjęć naraz'); e.target.value = ''; return; }
+  toast('Przygotowuję zdjęcia…', 10000);
+  for (const plik of pliki) S.noweFoty.push(await przygotujFoto(plik));
+  e.target.value = '';
+  rysujNoweFoty();
+  toast(`Zdjęć do zapisu: ${S.noweFoty.length}, zapiszą się razem z banerem`);
 });
+// podgląd zdjęć czekających na zapis, ✕ usuwa zdjęcie z listy
+function rysujNoweFoty() {
+  const box = $('#f-foto-nowe'); if (!box) return;
+  box.hidden = !S.noweFoty.length;
+  box.innerHTML = S.noweFoty.map((f, i) => `<span class="miniatura-nowa"><img alt="nowe zdjęcie" src="${URL.createObjectURL(f)}"><button type="button" class="miniatura-x" data-usun-foto="${i}" aria-label="usuń zdjęcie">✕</button></span>`).join('');
+}
+// nowy baner z kilkoma rodzajami: ile sztuk osobno dla każdego rodzaju
+function rysujIleWiele() {
+  const wyb = $$('[data-grupa="rodzaj"] .on').map(x => x.dataset.v), box = $('#f-ile-wiele'); if (!box) return;
+  const stare = Object.fromEntries($$('[data-ile-rodzaj]', box).map(i => [i.dataset.ileRodzaj, i.value]));
+  box.hidden = wyb.length < 2; $('#f-ile-box').hidden = wyb.length >= 2;
+  box.innerHTML = wyb.length < 2 ? '' : wyb.map(k => `<label>${RODZAJE[k][0]} ${esc(RODZAJE[k][1])}, sztuk <input type="number" min="1" max="20" value="${stare[k] || 1}" inputmode="numeric" data-ile-rodzaj="${k}"></label>`).join('');
+}
 
 $('#arkusz').addEventListener('click', async (e) => {
   const btn = e.target.closest('button'); if (!btn || !S.otwarty) return;
+  if (btn.dataset.usunFoto != null) { S.noweFoty.splice(Number(btn.dataset.usunFoto), 1); rysujNoweFoty(); return; }
   const grupa = btn.closest('[data-grupa]');
+  if (grupa && btn.dataset.v && grupa.dataset.wiele) { // kilka rodzajów naraz, co najmniej jeden zostaje
+    if (!btn.classList.contains('on') || $$('.on', grupa).length > 1) btn.classList.toggle('on');
+    rysujIleWiele(); return;
+  }
   if (grupa && btn.dataset.v) {
     $$('button', grupa).forEach(x => x.classList.toggle('on', x === btn));
     if (grupa.dataset.grupa === 'montowal') { $('#f-obcy-box').hidden = btn.dataset.v !== 'obcy'; if (btn.dataset.v === 'obcy') $('#f-obcy').focus(); }
@@ -815,16 +854,25 @@ $('#arkusz').addEventListener('submit', async (e) => {
   if (!dane.nieruchomosc) { toast(dane.typ === 'marketing' ? 'Wpisz nazwę miejsca' : 'Wpisz nieruchomość'); $('#f-nier').focus(); return; }
   if (mont === 'obcy' && !dane.montowal_obcy) { toast('Wpisz, kto spoza biura montował'); $('#f-obcy').focus(); return; }
   const btn = f.querySelector('[type=submit]'); btn.disabled = true;
-  let zapisany;
+  // nowy baner z kilkoma rodzajami = osobny wpis na każdy rodzaj (każdy sprawdza się w objeździe osobno)
+  const rodzaje = b ? [dane.rodzaj] : $$('[data-grupa="rodzaj"] .on').map(x => x.dataset.v);
+  const ileWiele = Object.fromEntries($$('[data-ile-rodzaj]').map(i => [i.dataset.ileRodzaj, Math.min(20, Math.max(1, parseInt(i.value, 10) || 1))]));
+  const zapisane = [];
   try {
-    if (b) { await DB.zmien(b.id, dane); zapisany = b; }
-    else zapisany = await DB.dodaj(dane);
-  } catch (err) { toast('Nie zapisało się: ' + err.message, 5000); btn.disabled = false; return; }
-  let komunikat = b ? 'Zapisano' : `Dodany: ${dane.nieruchomosc}`;
-  if (S.noweFoto) { // zdjęcie po zapisie, bo folder na serwerze nazywa się jak baner
-    try { const sciezka = await DB.wyslijFoto(zapisany.id, S.noweFoto, 'montaz'); await DB.zmien(zapisany.id, { zdjecie: sciezka, zdjecie_kiedy: dzis() }); komunikat += ', ze zdjęciem'; }
-    catch (err) { komunikat += '. Zdjęcie się nie wysłało, dodaj je w „Zmień”'; }
-    S.noweFoto = null;
+    if (b) { await DB.zmien(b.id, dane); zapisane.push(b); }
+    else for (const rodzaj of (rodzaje.length ? rodzaje : ['oczka'])) zapisane.push(await DB.dodaj({ ...dane, rodzaj, ile: rodzaje.length > 1 ? (ileWiele[rodzaj] || 1) : dane.ile }));
+  } catch (err) { toast('Nie zapisało się: ' + err.message, 5000); btn.disabled = false; if (zapisane.length) await odswiez(); return; }
+  let komunikat = b ? 'Zapisano' : zapisane.length > 1 ? `Dodane ${zapisane.length} banery: ${dane.nieruchomosc}` : `Dodany: ${dane.nieruchomosc}`;
+  if (S.noweFoty.length) { // zdjęcia po zapisie, bo folder na serwerze nazywa się jak baner; przy kilku rodzajach trafiają do każdego
+    toast('Wysyłam zdjęcia…', 30000);
+    let bledy = 0;
+    for (const z of zapisane) {
+      let pierwsza = null;
+      for (const foto of S.noweFoty) { try { const sc = await DB.wyslijFoto(z.id, foto, 'montaz'); pierwsza = pierwsza || sc; } catch (err) { bledy++; } }
+      if (pierwsza) { try { await DB.zmien(z.id, { zdjecie: pierwsza, zdjecie_kiedy: dzis() }); } catch (err) { bledy++; } }
+    }
+    komunikat += bledy ? '. Część zdjęć się nie wysłała, dodaj je w „Zmień”' : S.noweFoty.length > 1 ? `, zdjęć: ${S.noweFoty.length}` : ', ze zdjęciem';
+    S.noweFoty = [];
   }
   toast(komunikat, 4000);
   zamknijArkusz(); await odswiez();
